@@ -1,69 +1,108 @@
-import Image from "next/image";
+
+const menuItems = [
+  {
+    number: "01",
+    title: "เบิกเงิน",
+    description: "สร้างใบเบิกเงินล่วงหน้า",
+    detail: "สำหรับพนักงานที่ต้องการเบิกเงินไปใช้ในการทำงาน",
+    href: "/request",
+    icon: "＋",
+    color: "bg-blue-600",
+    hover: "hover:bg-blue-700",
+  },
+  {
+    number: "02",
+    title: "เคลียร์บิล",
+    description: "บันทึกค่าใช้จ่ายและคืนเงิน",
+    detail: "เลือกรายการใบเบิกที่ต้องการเคลียร์ค่าใช้จ่าย",
+    href: "/clear",
+    icon: "฿",
+    color: "bg-emerald-600",
+    hover: "hover:bg-emerald-700",
+  },
+];
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <main className="min-h-screen bg-slate-50 text-slate-800">
+      <header className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-5xl items-center gap-3 px-5 py-5 sm:px-8">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900 text-xl font-bold text-white">
+            ฿
+          </div>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight sm:text-2xl">
+              ระบบใบเบิกเงิน
+            </h1>
+            <p className="mt-1 text-sm text-slate-500">
+              ระบบเบิกเงินและเคลียร์ค่าใช้จ่าย
+            </p>
+          </div>
+        </div>
+      </header>
+
+      <section className="mx-auto max-w-5xl px-5 py-12 sm:px-8 sm:py-16">
+        <div className="mb-8">
+          <p className="text-sm font-semibold text-blue-700">
+            EXPENSE MANAGEMENT
+          </p>
+          <h2 className="mt-3 text-3xl font-bold sm:text-4xl">
+            สวัสดีครับ 👋
+          </h2>
+          <p className="mt-3 leading-7 text-slate-500">
+            เลือกรายการที่ต้องการใช้งานได้เลย
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="grid gap-5 sm:grid-cols-2">
+          {menuItems.map((item) => (
+            <a
+              key={item.number}
+              href={item.href}
+              className="group rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-lg sm:p-8"
+            >
+              <div className="flex items-start justify-between">
+                <div
+                  className={`flex h-14 w-14 items-center justify-center rounded-2xl text-3xl font-bold text-white ${item.color} ${item.hover}`}
+                >
+                  {item.icon}
+                </div>
+                <span className="text-sm font-medium text-slate-400">
+                  {item.number}
+                </span>
+              </div>
+
+              <h3 className="mt-7 text-2xl font-bold">{item.title}</h3>
+              <p className="mt-2 font-medium text-slate-700">
+                {item.description}
+              </p>
+              <p className="mt-2 text-sm leading-6 text-slate-500">
+                {item.detail}
+              </p>
+
+              <div className="mt-7 flex items-center justify-between border-t border-slate-100 pt-5">
+                <span className="text-sm font-semibold text-slate-700">
+                  เข้าใช้งาน
+                </span>
+                <span className="text-xl text-slate-400 transition group-hover:translate-x-1 group-hover:text-slate-900">
+                  →
+                </span>
+              </div>
+            </a>
+          ))}
         </div>
-      </main>
-    </div>
+
+        <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <p className="font-semibold">หมายเหตุ</p>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            เมื่อสร้างใบเบิกแล้ว สามารถติดตามสถานะและกลับมาเคลียร์ค่าใช้จ่ายได้ภายหลัง
+          </p>
+        </div>
+
+        <footer className="mt-10 text-center text-xs text-slate-400">
+          ระบบใบเบิกเงิน • Internal Expense System
+        </footer>
+      </section>
+    </main>
   );
 }
