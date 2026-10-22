@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/utils/supabase/client";
 
@@ -49,9 +49,32 @@ const STATUS_REVIEW = "รอตรวจสอบ";
 const STATUS_LEGACY_REFUND = "รอรับเงินคืน";
 const STATUS_CLEARED = "เคลียร์บิลแล้ว";
 
+const NEW_REQUEST_NOTIFICATIONS_KEY = "expense_admin_pending_new_requests";
+const ADVANCE_NOTIFICATIONS_KEY = "expense_admin_pending_advances";
+const REVIEW_NOTIFICATIONS_KEY = "expense_admin_pending_reviews";
+
 type Category = "all" | "new" | "waiting" | "review" | "cleared" | "advance";
 
 type CardColor = "red" | "orange" | "purple" | "green" | "blue" | "amber";
+
+function isReviewStatus(status: string) {
+  return status === STATUS_REVIEW || status === STATUS_LEGACY_REFUND;
+}
+
+function readStoredIds(key: string): Set<string> {
+  try {
+    const saved = window.localStorage.getItem(key);
+    if (!saved) return new Set();
+
+    const parsed: unknown = JSON.parse(saved);
+
+    if (!Array.isArray(parsed)) return new Set();
+
+    return new Set(parsed.filter((id): id is string => typeof id === "string"));
+  } catch {
+    return new Set();
+  }
+}
 
 export default function AdminPage() {
   const router = useRouter();
@@ -68,54 +91,199 @@ export default function AdminPage() {
   const [activeTab, setActiveTab] = useState<Category>("all");
   const [selectedRequest, setSelectedRequest] = useState<ExpenseRequest | null>(null);
 
+  // เก็บ ID ของรายการที่ยังต้องแจ้งเตือน
+  const pendingNewRequestIdsRef = useRef<Set<string>>(new Set());
+  const pendingAdvanceIdsRef = useRef<Set<string>>(new Set());
+  const pendingReviewIdsRef = useRef<Set<string>>(new Set());
+
+  // เก็บสถานะเดิมเพื่อตรวจจับรายการที่เปลี่ยนเข้าสู่หมวดรอตรวจสอบ
+  const knownRequestStatusesRef = useRef<Map<string, string>>(new Map());
+  const requestSnapshotReadyRef = useRef(false);
+  const advanceSnapshotReadyRef = useRef(false);
+  const loadingRef = useRef(false);
+
+  const [hasNewIncoming, setHasNewIncoming] = useState(false);
+  const [hasReviewIncoming, setHasReviewIncoming] = useState(false);
+
+  function persistNotificationState() {
+    const newRequestIds = [...pendingNewRequestIdsRef.current];
+    const advanceIds = [...pendingAdvanceIdsRef.current];
+    const reviewIds = [...pendingReviewIdsRef.current];
+
+    try {
+      window.localStorage.setItem(
+        NEW_REQUEST_NOTIFICATIONS_KEY,
+        JSON.stringify(newRequestIds)
+      );
+      window.localStorage.setItem(
+        ADVANCE_NOTIFICATIONS_KEY,
+        JSON.stringify(advanceIds)
+      );
+      window.localStorage.setItem(
+        REVIEW_NOTIFICATIONS_KEY,
+        JSON.stringify(reviewIds)
+      );
+    } catch (storageError) {
+      console.error("บันทึกสถานะการแจ้งเตือนไม่สำเร็จ:", storageError);
+    }
+
+    setHasNewIncoming(newRequestIds.length > 0 || advanceIds.length > 0);
+    setHasReviewIncoming(reviewIds.length > 0);
+  }
+
   useEffect(() => {
+    // กู้คืนรายการแจ้งเตือนจากเบราว์เซอร์
+    pendingNewRequestIdsRef.current = readStoredIds(
+      NEW_REQUEST_NOTIFICATIONS_KEY
+    );
+    pendingAdvanceIdsRef.current = readStoredIds(ADVANCE_NOTIFICATIONS_KEY);
+    pendingReviewIdsRef.current = readStoredIds(REVIEW_NOTIFICATIONS_KEY);
+
+    persistNotificationState();
     void loadRequests();
+
+    // ตรวจสอบข้อมูลอัตโนมัติทุก 5 วินาที
+    const intervalId = window.setInterval(() => {
+      void loadRequests(false);
+    }, 5000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
   }, []);
 
-  async function loadRequests() {
-    setLoading(true);
+  async function loadRequests(showLoading = true) {
+    // ป้องกันการโหลดซ้อนกันระหว่างรอบตรวจสอบอัตโนมัติ
+    if (loadingRef.current) return;
+
+    loadingRef.current = true;
+
+    if (showLoading) {
+      setLoading(true);
+    }
+
     setError("");
 
-    const [requestResult, clearingResult, advanceResult] = await Promise.all([
-      supabase
-        .from("expense_requests")
-        .select("*")
-        .order("created_at", { ascending: false }),
-      supabase.from("expense_clearings").select("*"),
-      supabase
-        .from("expense_advance_requests")
-        .select("*")
-        .order("created_at", { ascending: false }),
-    ]);
+    try {
+      const [requestResult, clearingResult, advanceResult] = await Promise.all([
+        supabase
+          .from("expense_requests")
+          .select("*")
+          .order("created_at", { ascending: false }),
+        supabase.from("expense_clearings").select("*"),
+        supabase
+          .from("expense_advance_requests")
+          .select("*")
+          .order("created_at", { ascending: false }),
+      ]);
 
-    if (requestResult.error) {
-      setError(requestResult.error.message);
-      setLoading(false);
-      return;
+      if (requestResult.error) {
+        setError(requestResult.error.message);
+        return;
+      }
+
+      const nextRequests = (requestResult.data || []) as ExpenseRequest[];
+      const currentRequestStatuses = new Map<string, string>();
+
+      for (const request of nextRequests) {
+        currentRequestStatuses.set(request.id, request.status);
+
+        // ใบเบิกใหม่จะมีจุดแดงจนกว่าจะรับทราบหรือลบสำเร็จ
+        if (request.status === STATUS_NEW) {
+          pendingNewRequestIdsRef.current.add(request.id);
+        }
+
+        // เพิ่มจุดแดงเมื่อมีรายการรอตรวจสอบ
+        if (isReviewStatus(request.status)) {
+          pendingReviewIdsRef.current.add(request.id);
+        }
+
+        // ตรวจจับการเปลี่ยนสถานะเข้าสู่รอตรวจสอบระหว่างรอบโหลด
+        const previousStatus = knownRequestStatusesRef.current.get(request.id);
+
+        if (
+          requestSnapshotReadyRef.current &&
+          isReviewStatus(request.status) &&
+          previousStatus &&
+          !isReviewStatus(previousStatus)
+        ) {
+          pendingReviewIdsRef.current.add(request.id);
+        }
+      }
+
+      // ล้างการแจ้งเตือนใบเบิกใหม่ เฉพาะรายการที่ไม่ใช่ใบเบิกใหม่แล้ว
+      for (const id of pendingNewRequestIdsRef.current) {
+        const currentRequest = nextRequests.find((request) => request.id === id);
+
+        if (!currentRequest || currentRequest.status !== STATUS_NEW) {
+          pendingNewRequestIdsRef.current.delete(id);
+        }
+      }
+
+      // ล้างจุดแดงรอตรวจสอบเมื่อสถานะเปลี่ยนออกจากหมวดนี้แล้ว
+      // เช่น เปลี่ยนเป็น "เคลียร์บิลแล้ว" หลังยืนยันสำเร็จ
+      for (const id of pendingReviewIdsRef.current) {
+        const currentRequest = nextRequests.find((request) => request.id === id);
+
+        if (!currentRequest || !isReviewStatus(currentRequest.status)) {
+          pendingReviewIdsRef.current.delete(id);
+        }
+      }
+
+      knownRequestStatusesRef.current = currentRequestStatuses;
+      requestSnapshotReadyRef.current = true;
+
+      setRequests(nextRequests);
+
+      if (clearingResult.error) {
+        console.error("โหลดใบเคลียร์บิลไม่สำเร็จ:", clearingResult.error);
+        setClearings([]);
+        setActionMessage(
+          "โหลดใบเบิกได้ แต่ไม่สามารถอ่านข้อมูลใบเคลียร์บิล กรุณาตรวจสอบสิทธิ์ตาราง expense_clearings"
+        );
+      } else {
+        setClearings((clearingResult.data || []) as ClearingSummary[]);
+        setActionMessage("");
+      }
+
+      if (advanceResult.error) {
+        console.error("โหลดข้อมูลเงินเบิกเพิ่มไม่สำเร็จ:", advanceResult.error);
+        setAdvances([]);
+        setError(`โหลดข้อมูลเงินเบิกเพิ่มไม่สำเร็จ: ${advanceResult.error.message}`);
+      } else {
+        const nextAdvances = (advanceResult.data || []) as AdvanceRequest[];
+
+        for (const advance of nextAdvances) {
+          // คำขอเบิกเพิ่มมีจุดแดงจนกว่าจะอนุมัติหรือปฏิเสธสำเร็จ
+          if (advance.status === "รออนุมัติ") {
+            pendingAdvanceIdsRef.current.add(advance.id);
+          }
+        }
+
+        // ล้างการแจ้งเตือนเมื่อคำขอเบิกเพิ่มไม่อยู่ในสถานะรออนุมัติแล้ว
+        for (const id of pendingAdvanceIdsRef.current) {
+          const currentAdvance = nextAdvances.find((advance) => advance.id === id);
+
+          if (!currentAdvance || currentAdvance.status !== "รออนุมัติ") {
+            pendingAdvanceIdsRef.current.delete(id);
+          }
+        }
+
+        advanceSnapshotReadyRef.current = true;
+        setAdvances(nextAdvances);
+      }
+
+      persistNotificationState();
+    } catch (loadError) {
+      console.error("โหลดข้อมูลไม่สำเร็จ:", loadError);
+      setError("ไม่สามารถโหลดข้อมูลได้ กรุณาลองอีกครั้ง");
+    } finally {
+      loadingRef.current = false;
+
+      if (showLoading) {
+        setLoading(false);
+      }
     }
-
-    setRequests((requestResult.data || []) as ExpenseRequest[]);
-
-    if (clearingResult.error) {
-      console.error("โหลดใบเคลียร์บิลไม่สำเร็จ:", clearingResult.error);
-      setClearings([]);
-      setActionMessage(
-        "โหลดใบเบิกได้ แต่ไม่สามารถอ่านข้อมูลใบเคลียร์บิล กรุณาตรวจสอบสิทธิ์ตาราง expense_clearings"
-      );
-    } else {
-      setClearings((clearingResult.data || []) as ClearingSummary[]);
-      setActionMessage("");
-    }
-
-    if (advanceResult.error) {
-      console.error("โหลดข้อมูลเงินเบิกเพิ่มไม่สำเร็จ:", advanceResult.error);
-      setAdvances([]);
-      setError(`โหลดข้อมูลเงินเบิกเพิ่มไม่สำเร็จ: ${advanceResult.error.message}`);
-    } else {
-      setAdvances((advanceResult.data || []) as AdvanceRequest[]);
-    }
-
-    setLoading(false);
   }
 
   function formatMoney(amount: number) {
@@ -152,13 +320,9 @@ export default function AdminPage() {
   const waitingRequests = requests.filter((r) => r.status === STATUS_WAITING);
 
   // รองรับข้อมูลเก่าที่เคยใช้สถานะ "รอรับเงินคืน"
-  // โดยรวมเข้าหมวดรอตรวจสอบ ไม่แสดงเป็นสถานะแยกอีกต่อไป
-  const reviewRequests = requests.filter(
-    (r) => r.status === STATUS_REVIEW || r.status === STATUS_LEGACY_REFUND
-  );
+  const reviewRequests = requests.filter((r) => isReviewStatus(r.status));
 
   const clearedRequests = requests.filter((r) => r.status === STATUS_CLEARED);
-
   const pendingAdvances = advances.filter((a) => a.status === "รออนุมัติ");
 
   const visibleRequests =
@@ -189,7 +353,6 @@ export default function AdminPage() {
   }
 
   // ผลต่าง = ยอดเงินที่เบิกรวม - ค่าใช้จ่ายจริง
-  // บวก = เงินเหลือ, ลบ = บริษัทต้องจ่ายเพิ่ม, ศูนย์ = พอดี
   function getDifference(clearing: ClearingSummary) {
     return (
       Number(clearing.requested_amount || 0) -
@@ -270,6 +433,11 @@ export default function AdminPage() {
       return;
     }
 
+    // ลบสำเร็จแล้ว จึงยกเลิกการแจ้งเตือนของรายการนี้
+    pendingNewRequestIdsRef.current.delete(request.id);
+    persistNotificationState();
+
+    setSelectedRequest(null);
     setActionMessage(`ลบใบเบิกของ ${request.requester_name} เรียบร้อยแล้ว`);
     await loadRequests();
   }
@@ -311,6 +479,10 @@ export default function AdminPage() {
       setConfirming(false);
       return;
     }
+
+    // รับทราบสำเร็จ จึงลบจุดแจ้งเตือนของใบเบิกนี้
+    pendingNewRequestIdsRef.current.delete(selectedRequest.id);
+    persistNotificationState();
 
     setSelectedRequest(null);
     setActiveTab("waiting");
@@ -364,6 +536,10 @@ export default function AdminPage() {
       return;
     }
 
+    // บันทึกผลสำเร็จ จึงยกเลิกจุดแจ้งเตือนของคำขอนี้
+    pendingAdvanceIdsRef.current.delete(advance.id);
+    persistNotificationState();
+
     setActionMessage(
       approved
         ? `อนุมัติเงินเบิกเพิ่ม ${formatMoney(Number(advance.amount))} บาทแล้ว`
@@ -397,9 +573,7 @@ export default function AdminPage() {
   function statusClass(status: string) {
     if (status === STATUS_CLEARED) return "bg-green-100 text-green-700";
     if (status === STATUS_WAITING) return "bg-orange-100 text-orange-700";
-    if (status === STATUS_REVIEW || status === STATUS_LEGACY_REFUND) {
-      return "bg-purple-100 text-purple-700";
-    }
+    if (isReviewStatus(status)) return "bg-purple-100 text-purple-700";
     if (status === STATUS_NEW) return "bg-red-100 text-red-700";
     return "bg-slate-100 text-slate-700";
   }
@@ -500,6 +674,17 @@ export default function AdminPage() {
     advance: "💰 รายการขอเบิกเงินเพิ่ม",
   };
 
+  function selectCategory(category: Category) {
+    setActiveTab(category);
+    setSelectedRequest(null);
+    setError("");
+    setActionMessage("");
+    setExpandedAdvanceId(null);
+
+    // การกดดูหมวดต่าง ๆ ไม่ล้างจุดแจ้งเตือน
+    // จุดแดงจะหายเมื่อสถานะรายการเปลี่ยนหลังดำเนินการสำเร็จเท่านั้น
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 p-4 text-slate-800 sm:p-8">
       <div className="mx-auto max-w-6xl">
@@ -524,28 +709,32 @@ export default function AdminPage() {
           </button>
         </header>
 
-        {/* การ์ดหมวดรายการ: รวมคำขอเบิกเงินเพิ่มไว้ในใบเบิกใหม่ */}
+        {/* การ์ดหมวดรายการ */}
         <section className="mt-8 grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-5">
           {categoryCards.map((card) => {
             const colors = cardColors[card.color];
             const isActive = activeTab === card.id;
+            const showNewDot = card.id === "new" && hasNewIncoming;
+            const showReviewDot = card.id === "review" && hasReviewIncoming;
 
             return (
               <button
                 key={card.id}
                 type="button"
                 aria-pressed={isActive}
-                onClick={() => {
-                  setActiveTab(card.id);
-                  setSelectedRequest(null);
-                  setError("");
-                  setActionMessage("");
-                  setExpandedAdvanceId(null);
-                }}
-                className={`min-w-0 rounded-xl border p-3 text-left shadow-sm transition ${
+                onClick={() => selectCategory(card.id)}
+                className={`relative min-w-0 rounded-xl border p-3 text-left shadow-sm transition ${
                   isActive ? colors.active : colors.inactive
                 }`}
               >
+                {(showNewDot || showReviewDot) && (
+                  <span
+                    aria-label="มีรายการที่ยังไม่ได้ดำเนินการ"
+                    title="มีรายการที่ยังไม่ได้ดำเนินการ"
+                    className="absolute right-3 top-3 h-3 w-3 rounded-full bg-red-600 ring-2 ring-white"
+                  />
+                )}
+
                 <p className={`text-sm font-semibold leading-snug ${colors.title}`}>
                   {card.title}
                 </p>
@@ -564,19 +753,21 @@ export default function AdminPage() {
           <button
             type="button"
             aria-pressed={activeTab === "all"}
-            onClick={() => {
-              setActiveTab("all");
-              setSelectedRequest(null);
-              setError("");
-              setActionMessage("");
-              setExpandedAdvanceId(null);
-            }}
-            className={`min-w-0 rounded-xl border p-3 text-left shadow-sm transition ${
+            onClick={() => selectCategory("all")}
+            className={`relative min-w-0 rounded-xl border p-3 text-left shadow-sm transition ${
               activeTab === "all"
                 ? cardColors.blue.active
                 : cardColors.blue.inactive
             }`}
           >
+            {(hasNewIncoming || hasReviewIncoming) && (
+              <span
+                aria-label="มีรายการที่ยังไม่ได้ดำเนินการ"
+                title="มีรายการที่ยังไม่ได้ดำเนินการ"
+                className="absolute right-3 top-3 h-3 w-3 rounded-full bg-red-600 ring-2 ring-white"
+              />
+            )}
+
             <p className={`text-sm font-semibold leading-snug ${cardColors.blue.title}`}>
               📋 ใบเบิกทั้งหมด
             </p>
@@ -688,7 +879,7 @@ export default function AdminPage() {
             </div>
           )}
 
-          {/* คำขอเบิกเงินเพิ่มที่รออนุมัติ แสดงในหมวดใบเบิกใหม่ */}
+          {/* คำขอเบิกเงินเพิ่มที่รออนุมัติ */}
           {!loading && !error && activeTab === "new" && pendingAdvances.length > 0 && (
             <div className="mt-5 space-y-4">
               {pendingAdvances.map((advance) => {
@@ -825,9 +1016,7 @@ export default function AdminPage() {
               {visibleRequests.map((request) => {
                 const clearing = getClearing(request.id);
                 const difference = clearing ? getDifference(clearing) : 0;
-                const isReview =
-                  request.status === STATUS_REVIEW ||
-                  request.status === STATUS_LEGACY_REFUND;
+                const isReview = isReviewStatus(request.status);
 
                 return (
                   <article

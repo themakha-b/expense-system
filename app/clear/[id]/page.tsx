@@ -79,13 +79,13 @@ export default function ClearDetailPage({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
   const [clearingDate, setClearingDate] = useState("");
   const [clearerName, setClearerName] = useState("");
   const [clearerPosition, setClearerPosition] = useState("");
 
-  // รายละเอียดและยอดเบิกเพิ่มที่อนุมัติแล้ว
   const [approvedAdvances, setApprovedAdvances] = useState<
     AdvanceRequest[]
   >([]);
@@ -95,7 +95,6 @@ export default function ClearDetailPage({
     0
   );
 
-  // แบบฟอร์มขอเบิกเงินเพิ่ม
   const [advanceDate, setAdvanceDate] = useState("");
   const [advanceAmount, setAdvanceAmount] = useState("");
   const [advanceReason, setAdvanceReason] = useState("");
@@ -107,7 +106,6 @@ export default function ClearDetailPage({
     { id: "item-1", description: "", amount: "" },
   ]);
 
-  // อ่านโหมดจาก URL และกำหนดหน้ากลับ
   useEffect(() => {
     const search = new URLSearchParams(window.location.search);
     const selectedMode = search.get("mode");
@@ -151,7 +149,6 @@ export default function ClearDetailPage({
 
         setRequest(requestData as ExpenseRequest);
 
-        // โหลดรายละเอียดเฉพาะคำขอเบิกเพิ่มที่อนุมัติแล้ว
         const { data: advanceData, error: advanceError } =
           await supabase
             .from("expense_advance_requests")
@@ -248,8 +245,6 @@ export default function ClearDetailPage({
     return `${day}/${month}/${Number(year) + 543}`;
   }
 
-  // ใช้วันที่ขอเบิกที่บันทึกไว้
-  // หากไม่มี advance_date ให้ใช้วันที่จาก requested_at
   function getAdvanceDate(advance: AdvanceRequest) {
     return formatDate(
       advance.advance_date || advance.requested_at || null
@@ -287,8 +282,6 @@ export default function ClearDetailPage({
     );
   }
 
-  // ถ้ามีใบเคลียร์แล้ว ให้อ้างอิงยอดที่บันทึกไว้
-  // ถ้ายังไม่มี ให้รวมใบเบิกหลักกับยอดเบิกเพิ่มที่อนุมัติแล้ว
   const requestedAmount = clearing
     ? Number(clearing.requested_amount || 0)
     : Number(request?.amount || 0) + approvedAdvanceTotal;
@@ -311,7 +304,61 @@ export default function ClearDetailPage({
       Number(clearing.total_expenses)
     : 0;
 
-  // ส่งคำขอเบิกเงินเพิ่ม
+  // ลบใบเบิกจากหน้ารายละเอียดที่เปิดผ่านหน้าแอดมิน
+  async function deleteRequest() {
+    if (!request || deleting) return;
+
+    if (backPath !== "/admin" || mode !== "clear") {
+      setError("ปุ่มลบใช้ได้จากหน้ารายละเอียดของแอดมินเท่านั้น");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `ยืนยันลบใบเบิกของ ${request.requester_name} ใช่หรือไม่?\n\n` +
+        `สถานะปัจจุบัน: ${request.status}\n` +
+        `จำนวนเงิน: ${formatMoney(Number(request.amount))} บาท\n\n` +
+        "ข้อมูลใบเบิก ใบเคลียร์ รายการค่าใช้จ่าย และคำขอเบิกเงินเพิ่มที่เกี่ยวข้องจะถูกลบ และไม่สามารถกู้คืนจากระบบนี้ได้"
+    );
+
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError("");
+
+    try {
+      const { data, error: deleteError } = await supabase.rpc(
+        "delete_expense_request",
+        {
+          p_request_id: request.id,
+        }
+      );
+
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+
+      if (!data || data.success !== true) {
+        throw new Error(
+          data?.message || "ระบบไม่สามารถยืนยันการลบใบเบิกได้"
+        );
+      }
+
+      window.alert("ลบใบเบิกและรายการที่เกี่ยวข้องเรียบร้อยแล้ว");
+      router.replace("/admin");
+      router.refresh();
+    } catch (err) {
+      console.error("Delete expense request failed:", err);
+
+      setError(
+        err instanceof Error
+          ? `ลบใบเบิกไม่สำเร็จ: ${err.message}`
+          : "ลบใบเบิกไม่สำเร็จ กรุณาลองใหม่"
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function submitAdvanceRequest() {
     if (!request || advanceSaving) return;
 
@@ -535,7 +582,6 @@ export default function ClearDetailPage({
     }
   }
 
-  // แอดมินยืนยันใบเคลียร์บิล
   async function confirmClearing() {
     if (confirmingClear || !request || !clearing) return;
 
@@ -629,9 +675,10 @@ export default function ClearDetailPage({
     );
   }
 
-  // ปุ่มพิมพ์และเอกสารพิมพ์ใช้ได้เมื่อสถานะเคลียร์บิลแล้วเท่านั้น
   const canPrint =
-    mode === "clear" && request.status === "เคลียร์บิลแล้ว" && alreadyCleared;
+    mode === "clear" &&
+    request.status === "เคลียร์บิลแล้ว" &&
+    alreadyCleared;
 
   return (
     <main className="min-h-screen bg-gray-100 p-4 print:min-h-0 print:bg-white print:p-0">
@@ -799,7 +846,15 @@ export default function ClearDetailPage({
                 </p>
                 <p>
                   <span>ผลต่าง</span>
-                  <strong>
+                  <strong
+                    className={
+                      savedDifference > 0
+                        ? "text-green-700"
+                        : savedDifference < 0
+                          ? "text-red-600"
+                          : "text-black"
+                    }
+                  >
                     {savedDifference > 0
                       ? `ต้องคืนบริษัท ${formatMoney(savedDifference)} บาท`
                       : savedDifference < 0
@@ -818,12 +873,7 @@ export default function ClearDetailPage({
           </article>
         )}
 
-        <div
-          className={
-            canPrint ? "print:hidden" : ""
-          }
-        >
-          {/* ข้อมูลใบเบิก */}
+        <div className={canPrint ? "print:hidden" : ""}>
           <section className="rounded-xl bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold">ข้อมูลใบเบิก</h2>
 
@@ -869,9 +919,25 @@ export default function ClearDetailPage({
                 </p>
               )}
             </div>
+
+            {backPath === "/admin" && mode === "clear" && (
+              <div className="mt-5 border-t border-red-100 pt-4">
+                <p className="mb-3 text-sm text-gray-500">
+                  ใช้สำหรับลบใบเบิกที่ไม่ต้องการแล้ว รวมถึงรายการที่เกี่ยวข้อง
+                </p>
+
+                <button
+                  type="button"
+                  onClick={deleteRequest}
+                  disabled={deleting || confirmingClear || saving}
+                  className="w-full rounded-lg bg-red-600 px-4 py-3 font-semibold text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {deleting ? "กำลังลบใบเบิก..." : "🗑️ ลบใบเบิกนี้"}
+                </button>
+              </div>
+            )}
           </section>
 
-          {/* รายละเอียดเบิกเงินเพิ่มที่อนุมัติแล้ว */}
           {mode === "clear" && approvedAdvances.length > 0 && (
             <section className="mt-5 rounded-xl border border-blue-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-blue-900">
@@ -941,7 +1007,6 @@ export default function ClearDetailPage({
             </section>
           )}
 
-          {/* โหมดเบิกเงินเพิ่ม */}
           {mode === "advance" && (
             <>
               {request.status === "รอเคลียร์" && !alreadyCleared ? (
@@ -1042,7 +1107,6 @@ export default function ClearDetailPage({
             </>
           )}
 
-          {/* โหมดเคลียร์บิล */}
           {mode === "clear" && (
             <>
               {alreadyCleared ? (
@@ -1136,7 +1200,15 @@ export default function ClearDetailPage({
                     <div className="mt-3 flex justify-between gap-4">
                       <span>ผลต่าง</span>
 
-                      <span className="font-semibold">
+                      <span
+                        className={`font-semibold ${
+                          savedDifference > 0
+                            ? "text-green-600"
+                            : savedDifference < 0
+                              ? "text-red-600"
+                              : "text-black"
+                        }`}
+                      >
                         {savedDifference > 0
                           ? `ต้องคืนบริษัท ${formatMoney(savedDifference)} บาท`
                           : savedDifference < 0
@@ -1148,14 +1220,13 @@ export default function ClearDetailPage({
                     </div>
                   </section>
 
-                  {/* ยืนยันได้เฉพาะแอดมินที่กำลังตรวจสอบใบเคลียร์ */}
                   {backPath === "/admin" &&
                     request.status === "รอตรวจสอบ" && (
                       <div className="mt-5 print:hidden">
                         <button
                           type="button"
                           onClick={confirmClearing}
-                          disabled={confirmingClear}
+                          disabled={confirmingClear || deleting}
                           className="w-full rounded-xl bg-green-600 px-5 py-3.5 text-lg font-bold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {confirmingClear
@@ -1315,8 +1386,8 @@ export default function ClearDetailPage({
                             difference > 0
                               ? "text-green-600"
                               : difference < 0
-                                ? "text-orange-600"
-                                : "text-gray-700"
+                                ? "text-red-600"
+                                : "text-black"
                           }`}
                         >
                           {difference > 0
@@ -1341,7 +1412,7 @@ export default function ClearDetailPage({
                     <button
                       type="button"
                       onClick={saveClearing}
-                      disabled={saving}
+                      disabled={saving || deleting}
                       className="w-full rounded-xl bg-green-600 px-5 py-3.5 text-lg font-bold text-white hover:bg-green-700 disabled:opacity-50"
                     >
                       {saving ? "กำลังบันทึก..." : "บันทึกใบเคลียร์บิล"}
@@ -1353,8 +1424,8 @@ export default function ClearDetailPage({
           )}
         </div>
 
-        {mode === "clear" && alreadyCleared && error && (
-          <div className="mt-5 rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800 print:hidden">
+        {error && (
+          <div className="mt-5 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 print:hidden">
             {error}
           </div>
         )}
